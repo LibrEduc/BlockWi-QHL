@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en" xml:lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>µcBlockly</title>
+  <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+</head>
+<body>
+  <flex id="container_page" class="wrapper_global">
+    <div class="divTableCell">
+      <div class="lang" key="HOME" id="title">µcBlockly</div>
+      <a href="https://github.com/A-S-T-U-C-E/ucBlockly" target="_blank" rel="noopener">
+        <div class="lang" key="ABOUT">About</div>
+      </a>
+      <a href="https://www.linkedin.com/in/sebcanet/" target="_blank" rel="noopener">
+        <div class="lang" key="CONTACT">Contact</div>
+      </a>
+      <select id="languageMenu"></select>
+      <select name="themeMenu" id="themeMenu">
+        <option class="lang" value="classic" id="themeClassicSpan" key="THEME_CLASSIC">classic</option>
+        <option class="lang" value="modern" id="themeModernSpan" key="THEME_MODERN">modern</option>
+        <option class="lang" value="deuteranopia" id="themeDeuteranopiaSpan" key="THEME_DEUTERANOPIA">deuteranopia</option>
+        <option class="lang" value="tritanopia" id="themeTritanopiaSpan" key="THEME_TRITANOPIA">tritanopia</option>
+        <option class="lang" value="zelos" id="themeZelosSpan" key="THEME_ZELOS">zelos</option>
+        <option class="lang" value="high_contrast" id="themeHighContrastSpan" key="THEME_HIGHCONTRAST">high_contrast</option>
+        <option class="lang" value="dark" id="themeDarkSpan" key="THEME_DARK">dark</option>
+        <option class="lang" value="seshat" id="themeSeshatThemeSpan" key="THEME_SESHAT">seshat</option>
+        <option class="lang" value="blackWhite" id="themeBwSpan" key="THEME_BLACKWHITE">blackWhite</option>
+      </select>
+      <select name="rendererMenu" id="rendererMenu">
+        <option class="lang" value="geras" id="rendererGeras" key="RENDERER_GERAS">geras</option>
+        <option class="lang" value="thrasos" id="rendererThrasos" key="RENDERER_THRASOS">thrasos</option>
+        <option class="lang" value="zelos" id="rendererZelos" key="RENDERER_ZELOS">zelos</option>
+        <option class="lang" value="minimalist" id="rendererMinimalist" key="RENDERER_MINI">minimalist</option>
+      </select>
+      <div class="lang" key="PLUGIN_MINIMAP">minimap</div>
+      <input type="checkbox" id="pluginMinimap" />
+      <div class="lang" key="PLUGIN_HIGHLIGHT">highlight</div>
+      <input type="checkbox" id="pluginHighlight" />
+      <div class="lang" key="PLUGIN_CONTINUOUSTOOLBOX">toolbox</div>
+      <input type="checkbox" id="pluginContinuousToolbox" />
+      <input type="checkbox" id="alwaysOpenedToolboxFlyout" />
+      <div class="lang" key="PLUGIN_TYPEDVARIABLES">variable</div>
+      <input type="checkbox" id="typedVariableSwitch" />
+      <div class="lang" key="codeEditorSwitch">editor</div>
+      <input type="checkbox" id="codeEditorSwitch" />
+    </div>
+    <flex id="flex_container_up" class="wrapper_element" style="flex: 1;">
+      <flex-item id="flex_container_up_left" style="flex: 1;">
+        <div id="shortcuts"></div>
+        <div id="div_workspace_content_area"></div>
+        <div id="div_workspace_content_blockly" style="position: absolute"></div>
+      </flex-item>
+      <flex-resizer></flex-resizer>
+      <flex-item id="flex_container_up_right" style="flex-basis: 0px;">
+        <flex-item id="flex_content_code">
+          <pre id="div_content_code"><code></code></pre>
+          <div id="div_content_monacoEditor"></div>
+        </flex-item>
+      </flex-item>
+    </flex>
+    <flex-resizer></flex-resizer>
+    <flex id="flex_container_bottom" class="wrapper_element" style="flex-basis: 0px;">
+      <flex-item id="flex_container_bottom_down" style="flex: 1;">
+        <pre id="content_console"><code></code></pre>
+      </flex-item>
+    </flex>
+  </flex>
+  <script>
+  (function() {
+    var isFileProtocol = window.location.protocol === 'file:';
+    var localBundle = 'bundle.js';
+    var cdnBundle = 'https://a-s-t-u-c-e.github.io/ucBlockly/dist/bundle/bundle.js';
+
+    function injectScript(src, onError) {
+      var s = document.createElement('script');
+      s.src = src;
+      s.defer = true;
+      if (onError) s.onerror = onError;
+      document.body.appendChild(s);
+    }
+
+    if (isFileProtocol) {
+      // En application Electron/packagee, on tente d'abord un bundle local
+      // (mis a jour via menu Aide), puis fallback CDN.
+      injectScript(localBundle, function() {
+        injectScript(cdnBundle);
+      });
+      return;
+    }
+
+    // En dev (localhost), on tente d'abord le bundle local/proxy.
+    // Si indisponible, on bascule sur le CDN pour garder l'UI fonctionnelle.
+    injectScript(localBundle, function() {
+      injectScript(cdnBundle);
+    });
+  })();
+  </script>
+  <script>
+  (function() {
+    function sendCodeToParent() {
+      var el = document.getElementById('div_content_code');
+      if (!el) return;
+      var codeEl = el.querySelector('code');
+      var code = (codeEl ? codeEl.innerText : el.innerText) || el.textContent || '';
+      code = (code || '').trim();
+      if (window.parent !== window) {
+        window.parent.postMessage({ type: 'ucblockly-code', code: code }, '*');
+      }
+    }
+    function observeCodeDiv() {
+      var el = document.getElementById('div_content_code');
+      if (!el) {
+        setTimeout(observeCodeDiv, 150);
+        return;
+      }
+      sendCodeToParent();
+      var observer = new MutationObserver(function() { sendCodeToParent(); });
+      observer.observe(el, { childList: true, subtree: true, characterData: true });
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', observeCodeDiv);
+    } else {
+      observeCodeDiv();
+    }
+  })();
+  </script>
+</body>
+</html>
