@@ -29,6 +29,7 @@ const RP2040_ADDITIONAL_URL =
   'https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json';
 const UCBLOCKLY_BUNDLE_URL = 'https://a-s-t-u-c-e.github.io/ucBlockly/dist/bundle/bundle.js';
 const UCBLOCKLY_COMMIT_API_URL = 'https://api.github.com/repos/A-S-T-U-C-E/ucBlockly/commits/main';
+const PROJECT_REPOSITORY_URL = 'https://github.com/LibrEduc/BlockWi-QHL';
 
 function ensureDirectorySync(dirPath: string) {
   fs.mkdirSync(dirPath, { recursive: true });
@@ -784,7 +785,9 @@ function refreshMenu() {
           label: labels.about,
           click: () => {
             const version = app.getVersion();
-            openInfoDialog(`${labels.appName}\n${labels.versionLabel}: ${version}`);
+            openInfoDialog(
+              `${labels.appName}\n${labels.versionLabel}: ${version}\n${PROJECT_REPOSITORY_URL}`
+            );
           },
         },
         {
@@ -800,7 +803,7 @@ function refreshMenu() {
         {
           label: labels.learnMore,
           click: () => {
-            void shell.openExternal('https://www.tinkercad.com/learn/circuits');
+            void shell.openExternal(PROJECT_REPOSITORY_URL);
           },
         },
         { type: 'separator' },
