@@ -1,5 +1,5 @@
 # BlockWi-QHL
-![Capture d'écran](build/screencapt.jpg)
+![Capture d'écran](public/screencapture.jpg)
 
 Application Electron + React pour la programmation visuelle (µcBlockly) et la simulation de cartes avec Wokwi.  
 Electron + React app for visual programming (µcBlockly) and board simulation with Wokwi.
