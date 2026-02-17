@@ -9,6 +9,7 @@ interface BlocklyEditorProps {
   selectedBoard: string;
   onCodeChange: (code: string) => void;
   localeCode: string;
+  consoleChunk: { id: number; text: string } | null;
 }
 
 /**
@@ -17,7 +18,7 @@ interface BlocklyEditorProps {
  * div_content_code et envoie le code au parent via postMessage.
  * Le parent transmet le code à l’iframe Wokwi (Monaco).
  */
-const BlocklyEditor: React.FC<BlocklyEditorProps> = ({ onCodeChange, localeCode }) => {
+const BlocklyEditor: React.FC<BlocklyEditorProps> = ({ onCodeChange, localeCode, consoleChunk }) => {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const isElectron = typeof window !== 'undefined' && typeof (window as any).require === 'function';
   const ipcRenderer = isElectron ? (window as any).require('electron').ipcRenderer : null;
@@ -53,6 +54,14 @@ const BlocklyEditor: React.FC<BlocklyEditorProps> = ({ onCodeChange, localeCode 
       })
       .catch(() => {});
   }, [defaultUrl, ipcRenderer, lang]);
+
+  useEffect(() => {
+    if (!consoleChunk || !iframeRef.current?.contentWindow) return;
+    iframeRef.current.contentWindow.postMessage(
+      { type: 'append-console', text: consoleChunk.text },
+      '*'
+    );
+  }, [consoleChunk]);
 
   return (
     <div

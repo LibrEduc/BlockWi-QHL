@@ -20,6 +20,7 @@ let currentLocale: LocaleCode = 'fr';
 let latestGeneratedCode = '';
 let appIconPath: string | null = null;
 let fileRootGuardAttached = false;
+let libraryDialogWindow: BrowserWindow | null = null;
 
 const ARDUINO_CLI_ROOT_DIR_NAME = 'arduino-cli-local';
 const ARDUINO_CLI_EXE_NAME = process.platform === 'win32' ? 'arduino-cli.exe' : 'arduino-cli';
@@ -29,7 +30,9 @@ const RP2040_ADDITIONAL_URL =
   'https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json';
 const UCBLOCKLY_BUNDLE_URL = 'https://a-s-t-u-c-e.github.io/ucBlockly/dist/bundle/bundle.js';
 const UCBLOCKLY_COMMIT_API_URL = 'https://api.github.com/repos/A-S-T-U-C-E/ucBlockly/commits/main';
+const UCBLOCKLY_REPOSITORY_URL = 'https://github.com/A-S-T-U-C-E/ucBlockly';
 const PROJECT_REPOSITORY_URL = 'https://github.com/LibrEduc/BlockWi-QHL';
+const APP_RELEASES_API_URL = 'https://api.github.com/repos/LibrEduc/BlockWi-QHL/releases/latest';
 
 function ensureDirectorySync(dirPath: string) {
   fs.mkdirSync(dirPath, { recursive: true });
@@ -154,21 +157,30 @@ function downloadFile(url: string, destinationPath: string): Promise<void> {
 function runCommand(
   command: string,
   args: string[],
-  options: { cwd?: string } = {}
+  options: { cwd?: string; onStdout?: (chunk: string) => void; onStderr?: (chunk: string) => void } = {}
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
+    const onStdout = typeof options.onStdout === 'function' ? options.onStdout : null;
+    const onStderr = typeof options.onStderr === 'function' ? options.onStderr : null;
+    const spawnOptions = { ...options };
+    delete spawnOptions.onStdout;
+    delete spawnOptions.onStderr;
     const child = spawn(command, args, {
       windowsHide: true,
-      ...options,
+      ...spawnOptions,
     });
 
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (data) => {
-      stdout += data.toString();
+      const chunk = data.toString();
+      stdout += chunk;
+      if (onStdout) onStdout(chunk);
     });
     child.stderr.on('data', (data) => {
-      stderr += data.toString();
+      const chunk = data.toString();
+      stderr += chunk;
+      if (onStderr) onStderr(chunk);
     });
 
     child.on('error', reject);
@@ -283,17 +295,23 @@ async function runArduinoCli(args: string[]) {
   const exePath = await installArduinoCliLocally();
   writeArduinoCliConfigIfMissing();
   const allArgs = ['--config-file', getArduinoCliConfigPath(), ...args];
-  return runCommand(exePath, allArgs);
+  appendArduinoCliConsole(`$ arduino-cli ${args.join(' ')}\n`);
+  return runCommand(exePath, allArgs, {
+    onStdout: (chunk) => appendArduinoCliConsole(chunk),
+    onStderr: (chunk) => appendArduinoCliConsole(chunk),
+  });
 }
 
 async function withArduinoAction(startMessage: string, successMessage: string, action: () => Promise<void>) {
-  showRendererNotification(startMessage);
+  showArduinoCliPanel(startMessage, true);
+  appendArduinoCliConsole('\n');
   try {
     await action();
-    showRendererNotification(successMessage);
+    showArduinoCliPanel(successMessage, false);
   } catch (error) {
     const details = error instanceof Error ? error.message : String(error);
-    showRendererNotification(`${t().arduinoActionError}: ${details}`);
+    appendArduinoCliConsole(`\n${t().arduinoActionError}: ${details}\n`);
+    showArduinoCliPanel(`${t().arduinoActionError}: ${details}`, false);
     openInfoDialog(`${t().arduinoActionError}\n\n${details}`);
   }
 }
@@ -350,6 +368,117 @@ function getUcBlocklyBundlePath() {
 
 function getUcBlocklyVersionPath() {
   return path.join(getUcBlocklyLocalDir(), '.ucblockly-version.json');
+}
+
+function readUcBlocklyPackageMetadata(): { name: string; version: string | null } {
+  const candidates = [
+    path.join(getUcBlocklyLocalDir(), 'package.json'),
+    path.join(process.cwd(), 'public', 'ucblockly', 'package.json'),
+    path.join(process.cwd(), 'build', 'ucblockly', 'package.json'),
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (!fs.existsSync(candidate)) continue;
+      const parsed = JSON.parse(fs.readFileSync(candidate, 'utf8')) as { name?: unknown; version?: unknown };
+      const name = typeof parsed.name === 'string' && parsed.name.trim() ? parsed.name.trim() : 'µcBlockly';
+      const version = typeof parsed.version === 'string' && parsed.version.trim() ? parsed.version.trim() : null;
+      return { name, version };
+    } catch (_) {}
+  }
+  return { name: 'µcBlockly', version: null };
+}
+
+function readAppPackageVersion(): string {
+  const candidates = [
+    path.join(process.cwd(), 'package.json'),
+    path.join(__dirname, '..', 'package.json'),
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (!fs.existsSync(candidate)) continue;
+      const parsed = JSON.parse(fs.readFileSync(candidate, 'utf8')) as { version?: unknown };
+      if (parsed && typeof parsed.version === 'string' && parsed.version.trim()) {
+        return parsed.version.trim();
+      }
+    } catch (_) {}
+  }
+  return app.getVersion();
+}
+
+function normalizeVersionString(raw: string): string {
+  if (!raw || typeof raw !== 'string') return '0.0.0';
+  const cleaned = raw.trim().replace(/^v/i, '');
+  const matched = cleaned.match(/\d+(?:\.\d+){0,2}/);
+  return matched ? matched[0] : '0.0.0';
+}
+
+function compareVersions(a: string, b: string): number {
+  const pa = normalizeVersionString(a).split('.').map((n) => Number.parseInt(n, 10) || 0);
+  const pb = normalizeVersionString(b).split('.').map((n) => Number.parseInt(n, 10) || 0);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i += 1) {
+    const va = pa[i] || 0;
+    const vb = pb[i] || 0;
+    if (va > vb) return 1;
+    if (va < vb) return -1;
+  }
+  return 0;
+}
+
+function extractReleaseVersion(release: Record<string, unknown>): string | null {
+  if (!release || typeof release !== 'object') return null;
+  if (typeof release.tag_name === 'string' && release.tag_name.trim()) {
+    return normalizeVersionString(release.tag_name);
+  }
+  if (typeof release.name === 'string' && release.name.trim()) {
+    return normalizeVersionString(release.name);
+  }
+  return null;
+}
+
+async function checkAndInstallAppUpdate() {
+  const currentVersion = readAppPackageVersion();
+  showArduinoCliPanel(t().appUpdateChecking, true);
+  try {
+    const release = (await fetchJson(APP_RELEASES_API_URL)) as Record<string, unknown>;
+    const latestVersion = extractReleaseVersion(release);
+    if (!latestVersion) {
+      throw new Error(t().appUpdateNoVersion);
+    }
+
+    if (compareVersions(latestVersion, currentVersion) <= 0) {
+      showArduinoCliPanel(t().appUpdateUpToDate, false);
+      return;
+    }
+
+    showArduinoCliPanel(
+      `${t().appUpdateAvailable} (${currentVersion} → ${latestVersion})`,
+      false
+    );
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+
+    const releaseUrl =
+      release && typeof release.html_url === 'string' && release.html_url
+        ? release.html_url
+        : `${PROJECT_REPOSITORY_URL}/releases/latest`;
+
+    const answer = await dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      title: t().appUpdateDialogTitle,
+      message: `${t().appUpdateAvailable} (${currentVersion} → ${latestVersion})`,
+      detail: t().appUpdateDialogBody,
+      buttons: [t().appUpdateLater, t().appUpdateOpenRelease],
+      defaultId: 1,
+      cancelId: 0,
+    });
+    if (answer.response === 1) {
+      await shell.openExternal(releaseUrl);
+    }
+  } catch (error) {
+    const details = error instanceof Error ? error.message : String(error);
+    showArduinoCliPanel(`${t().appUpdateError}: ${details}`, false);
+    openInfoDialog(`${t().appUpdateError}\n\n${details}`);
+  }
 }
 
 function getUcBlocklyBlankUrl() {
@@ -440,23 +569,25 @@ async function installUcBlocklyBundle(sha: string) {
 }
 
 async function checkAndInstallUcBlocklyUpdate() {
-  showRendererNotification(t().ucBlocklyUpdateChecking);
+  showArduinoCliPanel(t().ucBlocklyUpdateChecking, true);
+  appendArduinoCliConsole('\n');
   try {
     const latestSha = await fetchLatestUcBlocklySha();
     const installedSha = readUcBlocklyInstalledSha();
     const hasBundle = fs.existsSync(getUcBlocklyBundlePath());
 
     if (hasBundle && installedSha && installedSha === latestSha) {
-      showRendererNotification(t().ucBlocklyUpdateUpToDate);
+      showArduinoCliPanel(t().ucBlocklyUpdateUpToDate, false);
       return;
     }
 
-    showRendererNotification(t().ucBlocklyUpdateInstalling);
+    showArduinoCliPanel(t().ucBlocklyUpdateInstalling, true);
     await installUcBlocklyBundle(latestSha);
-    showRendererNotification(t().ucBlocklyUpdateInstalled);
+    showArduinoCliPanel(t().ucBlocklyUpdateInstalled, false);
   } catch (error) {
     const details = error instanceof Error ? error.message : String(error);
-    showRendererNotification(`${t().ucBlocklyUpdateError}: ${details}`);
+    appendArduinoCliConsole(`\n${t().ucBlocklyUpdateError}: ${details}\n`);
+    showArduinoCliPanel(`${t().ucBlocklyUpdateError}: ${details}`, false);
     openInfoDialog(`${t().ucBlocklyUpdateError}\n\n${details}`);
   }
 }
@@ -642,9 +773,95 @@ function showRendererNotification(message: string) {
   mainWindow.webContents.send('menu-notification', message);
 }
 
-function broadcastLocaleChanged(_locale: LocaleCode) {
+function showArduinoCliPanel(message: string, active: boolean) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  mainWindow.webContents.send('locale-changed', getLocalePayload());
+  mainWindow.webContents.send('arduino-cli-status', {
+    message: typeof message === 'string' ? message : '',
+    active: !!active,
+  });
+}
+
+function appendArduinoCliConsole(text: string) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (typeof text !== 'string' || !text) return;
+  mainWindow.webContents.send('arduino-cli-log', text);
+}
+
+function broadcastLocaleChanged(_locale: LocaleCode) {
+  const payload = getLocalePayload();
+  for (const win of BrowserWindow.getAllWindows()) {
+    try {
+      if (!win.isDestroyed()) {
+        win.webContents.send('locale-changed', payload);
+      }
+    } catch (_) {}
+  }
+}
+
+function openInstallLibraryDialog() {
+  if (libraryDialogWindow && !libraryDialogWindow.isDestroyed()) {
+    libraryDialogWindow.focus();
+    return;
+  }
+
+  libraryDialogWindow = new BrowserWindow({
+    width: 440,
+    height: 230,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    modal: !!mainWindow,
+    parent: mainWindow || undefined,
+    autoHideMenuBar: true,
+    title: t().installLibrary,
+    icon: appIconPath || undefined,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'library-dialog-preload.js'),
+    },
+  });
+
+  libraryDialogWindow.on('closed', () => {
+    libraryDialogWindow = null;
+  });
+
+  void libraryDialogWindow.loadFile(path.join(__dirname, 'library-dialog.html'));
+}
+
+function sanitizeLibraryName(rawName: string): string {
+  if (!rawName || typeof rawName !== 'string') return '';
+  return rawName.trim().replace(/[^\w\s.\-/:]/g, '');
+}
+
+async function installArduinoLibraryFromDialog(rawLibraryName: string, sender: Electron.WebContents) {
+  const safeReply = (payload: { ok: boolean; error?: string }) => {
+    try {
+      if (!sender.isDestroyed()) sender.send('install-library-done', payload);
+    } catch (_) {}
+  };
+
+  const libraryName = sanitizeLibraryName(rawLibraryName);
+  if (!libraryName) {
+    safeReply({ ok: false, error: t().installLibraryEmpty });
+    return;
+  }
+
+  showArduinoCliPanel(t().installLibraryProgress, true);
+  appendArduinoCliConsole('\n');
+  try {
+    await runArduinoCli(['lib', 'install', libraryName]);
+    safeReply({ ok: true });
+    showArduinoCliPanel(t().installLibrarySuccess, false);
+    if (libraryDialogWindow && !libraryDialogWindow.isDestroyed()) {
+      libraryDialogWindow.close();
+    }
+  } catch (error) {
+    const details = error instanceof Error ? error.message : String(error);
+    safeReply({ ok: false, error: details });
+    appendArduinoCliConsole(`\n${t().installLibraryError}: ${details}\n`);
+    showArduinoCliPanel(`${t().installLibraryError}: ${details}`, false);
+  }
 }
 
 async function copyProgramToClipboard() {
@@ -726,7 +943,9 @@ function refreshMenu() {
         { type: 'separator' },
         {
           label: labels.installLibrary,
-          click: () => openInfoDialog(labels.featureLater),
+          click: () => {
+            openInstallLibraryDialog();
+          },
         },
         { type: 'separator' },
         {
@@ -784,15 +1003,27 @@ function refreshMenu() {
         {
           label: labels.about,
           click: () => {
-            const version = app.getVersion();
+            const version = readAppPackageVersion();
+            const ucBlocklyPackage = readUcBlocklyPackageMetadata();
+            const ucBlocklyVersion = ucBlocklyPackage.version || labels.aboutUcBlocklyVersionUnknown;
             openInfoDialog(
-              `${labels.appName}\n${labels.versionLabel}: ${version}\n${PROJECT_REPOSITORY_URL}`
+              [
+                labels.appName,
+                `${labels.versionLabel}: ${version}`,
+                PROJECT_REPOSITORY_URL,
+                '',
+                ucBlocklyPackage.name || labels.aboutUcBlocklyTitle,
+                `${labels.versionLabel}: ${ucBlocklyVersion}`,
+                `${UCBLOCKLY_REPOSITORY_URL}`,
+              ].join('\n')
             );
           },
         },
         {
           label: labels.checkUpdate,
-          click: () => openInfoDialog(labels.updatesLater),
+          click: () => {
+            void checkAndInstallAppUpdate();
+          },
         },
         {
           label: labels.checkUcBlocklyUpdate,
@@ -909,6 +1140,16 @@ function createWindow() {
   ipcMain.removeHandler('get-ucblockly-url');
   ipcMain.handle('get-ucblockly-url', async (_event, localeCode: string) => {
     return getUcBlocklyIndexUrl(localeCode);
+  });
+  ipcMain.removeAllListeners('close-library-dialog');
+  ipcMain.on('close-library-dialog', () => {
+    if (libraryDialogWindow && !libraryDialogWindow.isDestroyed()) {
+      libraryDialogWindow.close();
+    }
+  });
+  ipcMain.removeAllListeners('install-library');
+  ipcMain.on('install-library', (event, libraryName: string) => {
+    void installArduinoLibraryFromDialog(libraryName, event.sender);
   });
 
   if (useDevServer) {

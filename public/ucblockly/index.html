@@ -126,5 +126,23 @@
     }
   })();
   </script>
+  <script>
+  (function() {
+    function appendConsole(text) {
+      var host = document.getElementById('content_console');
+      if (!host || typeof text !== 'string' || !text) return;
+      var codeEl = host.querySelector('code');
+      var target = codeEl || host;
+      target.textContent = (target.textContent || '') + text;
+      host.scrollTop = host.scrollHeight;
+    }
+
+    window.addEventListener('message', function(event) {
+      var data = event && event.data ? event.data : null;
+      if (!data || data.type !== 'append-console') return;
+      appendConsole(data.text || '');
+    });
+  })();
+  </script>
 </body>
 </html>

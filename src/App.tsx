@@ -37,6 +37,11 @@ const App: React.FC = () => {
   const [leftWidth, setLeftWidth] = useState(800);
   const [generatedCode, setGeneratedCode] = useState('');
   const [menuMessage, setMenuMessage] = useState('');
+  const [arduinoCliStatus, setArduinoCliStatus] = useState<{ active: boolean; message: string }>({
+    active: false,
+    message: '',
+  });
+  const [arduinoCliConsoleChunk, setArduinoCliConsoleChunk] = useState<{ id: number; text: string } | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -44,6 +49,8 @@ const App: React.FC = () => {
   const wokwiIframeRef = useRef<HTMLIFrameElement | null>(null);
   const wokwiWebviewRef = useRef<HTMLElement | null>(null);
   const menuMessageTimerRef = useRef<number | null>(null);
+  const arduinoStatusTimerRef = useRef<number | null>(null);
+  const arduinoLogSeqRef = useRef(0);
   const isElectron = typeof window !== 'undefined' && typeof (window as any).require === 'function';
   const ipcRenderer = isElectron ? (window as any).require('electron').ipcRenderer : null;
   const text = (key: string, frFallback: string, enFallback: string) => {
@@ -160,11 +167,41 @@ const App: React.FC = () => {
     };
 
     ipcRenderer.on('menu-notification', handleMenuNotification);
+    const handleArduinoCliStatus = (_event: unknown, payload: unknown) => {
+      if (!payload || typeof payload !== 'object') return;
+      const status = payload as { active?: unknown; message?: unknown };
+      if (arduinoStatusTimerRef.current !== null) {
+        window.clearTimeout(arduinoStatusTimerRef.current);
+        arduinoStatusTimerRef.current = null;
+      }
+      setArduinoCliStatus({
+        active: !!status.active,
+        message: typeof status.message === 'string' ? status.message : '',
+      });
+      if (!status.active) {
+        arduinoStatusTimerRef.current = window.setTimeout(() => {
+          setArduinoCliStatus({ active: false, message: '' });
+          arduinoStatusTimerRef.current = null;
+        }, 2600);
+      }
+    };
+    const handleArduinoCliLog = (_event: unknown, text: unknown) => {
+      if (typeof text !== 'string' || !text) return;
+      arduinoLogSeqRef.current += 1;
+      setArduinoCliConsoleChunk({ id: arduinoLogSeqRef.current, text });
+    };
+    ipcRenderer.on('arduino-cli-status', handleArduinoCliStatus);
+    ipcRenderer.on('arduino-cli-log', handleArduinoCliLog);
     return () => {
       if (menuMessageTimerRef.current !== null) {
         window.clearTimeout(menuMessageTimerRef.current);
       }
+      if (arduinoStatusTimerRef.current !== null) {
+        window.clearTimeout(arduinoStatusTimerRef.current);
+      }
       ipcRenderer.removeListener('menu-notification', handleMenuNotification);
+      ipcRenderer.removeListener('arduino-cli-status', handleArduinoCliStatus);
+      ipcRenderer.removeListener('arduino-cli-log', handleArduinoCliLog);
     };
   }, [ipcRenderer]);
 
@@ -256,6 +293,7 @@ const App: React.FC = () => {
             selectedBoard={selectedBoard}
             onCodeChange={setGeneratedCode}
             localeCode={localeCode}
+            consoleChunk={arduinoCliConsoleChunk}
           />
         </div>
       </div>
@@ -299,6 +337,9 @@ const App: React.FC = () => {
           </div>
         )}
       </div>
+      {arduinoCliStatus.message ? (
+        <div className="arduino-cli-feedback">{arduinoCliStatus.message}</div>
+      ) : null}
       {menuMessage ? <div className="menu-feedback">{menuMessage}</div> : null}
     </div>
   );

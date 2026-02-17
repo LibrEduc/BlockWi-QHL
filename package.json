@@ -1,6 +1,6 @@
 {
   "name": "blockwi-qhl",
-  "version": "0.9.9",
+  "version": "0.9.8",
   "description": "BlockWi-QHL",
   "homepage": ".",
   "main": "electron/main.js",
